@@ -1,15 +1,22 @@
 from fastapi import FastAPI
+from database import get_connection, create_tables, seed_menu
 
 app = FastAPI()
+
+create_tables()
+seed_menu()
+
 
 @app.get("/")
 def home():
     return {"message": "Canteen Cravs API is running"}
 
+
 @app.get("/menu")
 def menu():
-    return [
-        {"id": 1, "name": "Samosa", "price": 15},
-        {"id": 2, "name": "Chai", "price": 10},
-        {"id": 3, "name": "Veg Sandwich", "price": 40},
-    ]
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT id, name, price, category, stock, is_available FROM menu_items"
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
