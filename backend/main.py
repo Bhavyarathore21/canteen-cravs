@@ -1,3 +1,4 @@
+from typing import Literal
 import sqlite3
 
 from fastapi import Depends, FastAPI, HTTPException
@@ -196,3 +197,120 @@ def update_availability(
     conn.commit()
     conn.close()
     return {"message": reason}
+
+
+
+class OrderItemIn(BaseModel):
+    menu_item_id: int
+    quantity: int = Field(ge=1, le=20)
+
+
+class OrderCreate(BaseModel):
+    items: list[OrderItemIn] = Field(min_length=1)
+    payment_method: Literal["UPI", "Cash"]
+
+
+@app.post("/orders", status_code=201)
+def place_order(data: OrderCreate, user: dict = Depends(get_current_user)):
+    # If the same item appears twice, add the quantities together
+    wanted = {}
+    for line in data.items:
+        wanted[line.menu_item_id] = wanted.get(line.menu_item_id, 0) + line.quantity
+
+    conn = get_connection()
+    try:
+        total = 0
+        lines = []  # (item_id, name, quantity, price, stock_after)
+
+        for item_id, qty in wanted.items():
+            item = conn.execute(
+                "SELECT id, name, price FROM menu_items WHERE id = ?", (item_id,)
+            ).fetchone()
+            if item is None:
+                raise HTTPException(status_code=404, detail=f"Menu item {item_id} not found")
+
+            # Check stock and reduce it in ONE step
+            cur = conn.execute(
+                "UPDATE menu_items SET stock = stock - ? "
+                "WHERE id = ? AND is_available = 1 AND stock >= ?",
+                (qty, item_id, qty),
+            )
+            if cur.rowcount == 0:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Sorry, {item['name']} is sold out or has less than {qty} left",
+                )
+
+            stock_after = conn.execute(
+                "SELECT stock FROM menu_items WHERE id = ?", (item_id,)
+            ).fetchone()["stock"]
+            lines.append((item_id, item["name"], qty, item["price"], stock_after))
+            total += qty * item["price"]
+
+        # Pickup code: A001, A002 ... counting today's orders
+        count_today = conn.execute(
+            "SELECT COUNT(*) FROM orders WHERE date(created_at) = date('now')"
+        ).fetchone()[0]
+        order_code = f"A{count_today + 1:03d}"
+
+        cur = conn.execute(
+            "INSERT INTO orders (order_code, user_id, total, status, payment_method, payment_status) "
+            "VALUES (?, ?, ?, 'Placed', ?, 'Pending')",
+            (order_code, user["id"], total, data.payment_method),
+        )
+        order_id = cur.lastrowid
+
+        for item_id, name, qty, price, stock_after in lines:
+            conn.execute(
+                "INSERT INTO order_items (order_id, menu_item_id, quantity, price) "
+                "VALUES (?, ?, ?, ?)",
+                (order_id, item_id, qty, price),
+            )
+            log_stock(conn, item_id, stock_after, f"order {order_code}")
+
+        conn.execute(
+            "INSERT INTO order_status_log (order_id, status) VALUES (?, 'Placed')",
+            (order_id,),
+        )
+        conn.commit()  # everything is saved together
+
+    except Exception:
+        conn.rollback()  # something failed, so undo everything
+        raise
+    finally:
+        conn.close()
+
+    return {
+        "order_id": order_id,
+        "order_code": order_code,
+        "total": total,
+        "status": "Placed",
+        "payment_method": data.payment_method,
+        "payment_status": "Pending",
+        "items": [
+            {"name": name, "quantity": qty, "price": price}
+            for _, name, qty, price, _ in lines
+        ],
+    }
+
+
+@app.get("/orders/my")
+def my_orders(user: dict = Depends(get_current_user)):
+    conn = get_connection()
+    orders = conn.execute(
+        "SELECT id, order_code, total, status, payment_method, payment_status, created_at "
+        "FROM orders WHERE user_id = ? ORDER BY id DESC",
+        (user["id"],),
+    ).fetchall()
+
+    result = []
+    for order in orders:
+        items = conn.execute(
+            "SELECT m.name, oi.quantity, oi.price FROM order_items oi "
+            "JOIN menu_items m ON m.id = oi.menu_item_id WHERE oi.order_id = ?",
+            (order["id"],),
+        ).fetchall()
+        result.append({**dict(order), "items": [dict(i) for i in items]})
+
+    conn.close()
+    return result
