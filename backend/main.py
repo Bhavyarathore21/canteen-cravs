@@ -1,7 +1,7 @@
 from typing import Literal
 import sqlite3
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from auth import (
@@ -219,6 +219,17 @@ def place_order(data: OrderCreate, user: dict = Depends(get_current_user)):
 
     conn = get_connection()
     try:
+        # Block cash orders after 3 or more no-shows
+        if data.payment_method == "Cash":
+            row = conn.execute(
+                "SELECT no_show_count FROM users WHERE id = ?", (user["id"],)
+            ).fetchone()
+            if row["no_show_count"] >= 3:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Cash orders are disabled after repeated no-shows. Please pay by UPI.",
+                )
+
         total = 0
         lines = []  # (item_id, name, quantity, price, stock_after)
 
@@ -314,3 +325,169 @@ def my_orders(user: dict = Depends(get_current_user)):
 
     conn.close()
     return result
+
+VALID_NEXT = {
+    "Placed": ["Preparing", "Cancelled"],
+    "Preparing": ["Ready", "Cancelled"],
+    "Ready": ["Completed"],
+}
+
+
+class StatusUpdate(BaseModel):
+    status: Literal["Preparing", "Ready", "Completed", "Cancelled"]
+
+
+def set_order_status(conn, order_id, new_status):
+    conn.execute("UPDATE orders SET status = ? WHERE id = ?", (new_status, order_id))
+    conn.execute(
+        "INSERT INTO order_status_log (order_id, status) VALUES (?, ?)",
+        (order_id, new_status),
+    )
+
+
+def restore_stock(conn, order_id, order_code, reason):
+    items = conn.execute(
+        "SELECT menu_item_id, quantity FROM order_items WHERE order_id = ?",
+        (order_id,),
+    ).fetchall()
+    for it in items:
+        conn.execute(
+            "UPDATE menu_items SET stock = stock + ? WHERE id = ?",
+            (it["quantity"], it["menu_item_id"]),
+        )
+        new_stock = conn.execute(
+            "SELECT stock FROM menu_items WHERE id = ?", (it["menu_item_id"],)
+        ).fetchone()["stock"]
+        log_stock(conn, it["menu_item_id"], new_stock, f"{reason} {order_code}")
+
+
+def flag_refund_if_paid(conn, order):
+    if order["payment_status"] == "Paid":
+        conn.execute(
+            "UPDATE orders SET payment_status = 'Refund Pending' WHERE id = ?",
+            (order["id"],),
+        )
+
+
+@app.get("/admin/orders")
+def admin_orders(status: str | None = None, admin: dict = Depends(require_admin)):
+    conn = get_connection()
+    base = (
+        "SELECT o.id, o.order_code, o.total, o.status, o.payment_method, "
+        "o.payment_status, o.created_at, u.name AS customer "
+        "FROM orders o JOIN users u ON u.id = o.user_id "
+    )
+    if status:
+        orders = conn.execute(base + "WHERE o.status = ? ORDER BY o.id", (status,)).fetchall()
+    else:
+        orders = conn.execute(
+            base + "WHERE o.status IN ('Placed', 'Preparing', 'Ready') ORDER BY o.id"
+        ).fetchall()
+
+    result = []
+    for order in orders:
+        items = conn.execute(
+            "SELECT m.name, oi.quantity FROM order_items oi "
+            "JOIN menu_items m ON m.id = oi.menu_item_id WHERE oi.order_id = ?",
+            (order["id"],),
+        ).fetchall()
+        result.append({**dict(order), "items": [dict(i) for i in items]})
+    conn.close()
+    return result
+
+
+@app.patch("/admin/orders/{order_id}/status")
+def update_order_status(
+    order_id: int, data: StatusUpdate, admin: dict = Depends(require_admin)
+):
+    conn = get_connection()
+    try:
+        order = conn.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone()
+        if order is None:
+            raise HTTPException(status_code=404, detail="Order not found")
+        if data.status not in VALID_NEXT.get(order["status"], []):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot move an order from {order['status']} to {data.status}",
+            )
+
+        if data.status == "Cancelled":
+            if order["status"] == "Placed":  # nothing cooked yet
+                restore_stock(conn, order_id, order["order_code"], "cancelled by canteen, order")
+            flag_refund_if_paid(conn, order)
+
+        set_order_status(conn, order_id, data.status)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return {"message": f"Order {order['order_code']} is now {data.status}"}
+
+
+@app.post("/orders/{order_id}/cancel")
+def cancel_order(order_id: int, user: dict = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        order = conn.execute(
+            "SELECT * FROM orders WHERE id = ? AND user_id = ?", (order_id, user["id"])
+        ).fetchone()
+        if order is None:
+            raise HTTPException(status_code=404, detail="Order not found")
+
+        # Cancel only if still 'Placed' (check and change in one step)
+        cur = conn.execute(
+            "UPDATE orders SET status = 'Cancelled' WHERE id = ? AND status = 'Placed'",
+            (order_id,),
+        )
+        if cur.rowcount == 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Too late to cancel: the order is already {order['status']}",
+            )
+
+        conn.execute(
+            "INSERT INTO order_status_log (order_id, status) VALUES (?, 'Cancelled')",
+            (order_id,),
+        )
+        restore_stock(conn, order_id, order["order_code"], "cancelled by student, order")
+        flag_refund_if_paid(conn, order)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return {"message": f"Order {order['order_code']} cancelled"}
+
+
+@app.post("/admin/orders/expire-no-shows")
+def expire_no_shows(
+    minutes: int = Query(default=30, ge=0), admin: dict = Depends(require_admin)
+):
+    conn = get_connection()
+    try:
+        stale = conn.execute(
+            """
+            SELECT o.id, o.user_id FROM orders o
+            WHERE o.status = 'Ready'
+              AND (SELECT MAX(changed_at) FROM order_status_log l
+                   WHERE l.order_id = o.id AND l.status = 'Ready') <= datetime('now', ?)
+            """,
+            (f"-{minutes} minutes",),
+        ).fetchall()
+
+        for o in stale:
+            set_order_status(conn, o["id"], "Expired")
+            conn.execute(
+                "UPDATE users SET no_show_count = no_show_count + 1 WHERE id = ?",
+                (o["user_id"],),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return {"expired_orders": len(stale), "after_minutes": minutes}
