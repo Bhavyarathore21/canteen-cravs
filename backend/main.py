@@ -362,10 +362,13 @@ def restore_stock(conn, order_id, order_code, reason):
 
 
 def flag_refund_if_paid(conn, order):
-    if order["payment_status"] == "Paid":
+    if order["payment_status"] in ("Paid", "Submitted"):
         conn.execute(
             "UPDATE orders SET payment_status = 'Refund Pending' WHERE id = ?",
             (order["id"],),
+        )
+        log_payment(
+            conn, order["id"], "Refund pending (order cancelled)", order["total"]
         )
 
 
@@ -411,6 +414,19 @@ def update_order_status(
                 detail=f"Cannot move an order from {order['status']} to {data.status}",
             )
 
+        # Payment rules
+        if (
+            data.status == "Preparing"
+            and order["payment_method"] == "UPI"
+            and order["payment_status"] != "Paid"
+        ):
+            raise HTTPException(status_code=400, detail="UPI payment is not confirmed yet")
+        if data.status == "Completed" and order["payment_status"] != "Paid":
+            raise HTTPException(
+                status_code=400,
+                detail="Collect and confirm the payment before completing the order",
+            )
+
         if data.status == "Cancelled":
             if order["status"] == "Placed":  # nothing cooked yet
                 restore_stock(conn, order_id, order["order_code"], "cancelled by canteen, order")
@@ -424,7 +440,6 @@ def update_order_status(
     finally:
         conn.close()
     return {"message": f"Order {order['order_code']} is now {data.status}"}
-
 
 @app.post("/orders/{order_id}/cancel")
 def cancel_order(order_id: int, user: dict = Depends(get_current_user)):
@@ -491,3 +506,141 @@ def expire_no_shows(
     finally:
         conn.close()
     return {"expired_orders": len(stale), "after_minutes": minutes}
+
+class UpiReference(BaseModel):
+    reference: str = Field(pattern=r"^\d{12}$")  # UPI reference numbers have 12 digits
+
+
+def log_payment(conn, order_id, event, amount=None, reference=None):
+    conn.execute(
+        "INSERT INTO payment_log (order_id, event, amount, reference) VALUES (?, ?, ?, ?)",
+        (order_id, event, amount, reference),
+    )
+
+
+@app.post("/orders/{order_id}/payment")
+def submit_upi_payment(
+    order_id: int, data: UpiReference, user: dict = Depends(get_current_user)
+):
+    conn = get_connection()
+    try:
+        order = conn.execute(
+            "SELECT * FROM orders WHERE id = ? AND user_id = ?", (order_id, user["id"])
+        ).fetchone()
+        if order is None:
+            raise HTTPException(status_code=404, detail="Order not found")
+        if order["payment_method"] != "UPI":
+            raise HTTPException(status_code=400, detail="This is a cash order")
+        if order["status"] in ("Cancelled", "Expired"):
+            raise HTTPException(status_code=400, detail=f"Order is {order['status']}")
+
+        used = conn.execute(
+            "SELECT 1 FROM payment_log WHERE reference = ?", (data.reference,)
+        ).fetchone()
+        if used:
+            raise HTTPException(
+                status_code=409, detail="This UPI reference was already used"
+            )
+
+        cur = conn.execute(
+            "UPDATE orders SET payment_status = 'Submitted' "
+            "WHERE id = ? AND payment_status = 'Pending'",
+            (order_id,),
+        )
+        if cur.rowcount == 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Payment is already {order['payment_status']}",
+            )
+
+        log_payment(conn, order_id, "UPI reference submitted", order["total"], data.reference)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return {"message": "Payment submitted. Waiting for the canteen to confirm."}
+
+
+@app.post("/admin/orders/{order_id}/payment/confirm")
+def confirm_payment(order_id: int, admin: dict = Depends(require_admin)):
+    conn = get_connection()
+    try:
+        order = conn.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone()
+        if order is None:
+            raise HTTPException(status_code=404, detail="Order not found")
+        if order["status"] in ("Cancelled", "Expired"):
+            raise HTTPException(status_code=400, detail=f"Order is {order['status']}")
+
+        cur = conn.execute(
+            "UPDATE orders SET payment_status = 'Paid' "
+            "WHERE id = ? AND payment_status IN ('Pending', 'Submitted')",
+            (order_id,),
+        )
+        if cur.rowcount == 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Payment is already {order['payment_status']}",
+            )
+
+        event = "Cash received" if order["payment_method"] == "Cash" else "UPI payment confirmed"
+        log_payment(conn, order_id, event, order["total"])
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return {"message": f"Order {order['order_code']} marked as Paid"}
+
+
+@app.post("/admin/orders/{order_id}/refund")
+def mark_refunded(order_id: int, admin: dict = Depends(require_admin)):
+    conn = get_connection()
+    try:
+        order = conn.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone()
+        if order is None:
+            raise HTTPException(status_code=404, detail="Order not found")
+
+        cur = conn.execute(
+            "UPDATE orders SET payment_status = 'Refunded' "
+            "WHERE id = ? AND payment_status = 'Refund Pending'",
+            (order_id,),
+        )
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=400, detail="No refund is pending for this order")
+
+        log_payment(conn, order_id, "Refund sent", order["total"])
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return {"message": f"Order {order['order_code']} refunded"}
+
+
+@app.get("/admin/payments/summary")
+def payments_summary(admin: dict = Depends(require_admin)):
+    conn = get_connection()
+    collected = conn.execute(
+        "SELECT payment_method, COUNT(*) AS orders, SUM(total) AS amount "
+        "FROM orders WHERE payment_status = 'Paid' AND date(created_at) = date('now') "
+        "GROUP BY payment_method"
+    ).fetchall()
+    due = conn.execute(
+        "SELECT COUNT(*) AS orders, COALESCE(SUM(total), 0) AS amount FROM orders "
+        "WHERE payment_status IN ('Pending', 'Submitted') "
+        "AND status NOT IN ('Cancelled', 'Expired')"
+    ).fetchone()
+    refunds = conn.execute(
+        "SELECT COUNT(*) AS orders, COALESCE(SUM(total), 0) AS amount "
+        "FROM orders WHERE payment_status = 'Refund Pending'"
+    ).fetchone()
+    conn.close()
+    return {
+        "collected_today": [dict(r) for r in collected],
+        "not_yet_paid": dict(due),
+        "refunds_to_send": dict(refunds),
+    }

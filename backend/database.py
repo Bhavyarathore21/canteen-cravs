@@ -65,6 +65,15 @@ def create_tables():
         reason TEXT,
         changed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS payment_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        order_id INTEGER NOT NULL REFERENCES orders(id),
+        event TEXT NOT NULL,
+        amount REAL,
+        reference TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
     """)
     conn.commit()
     conn.close()
