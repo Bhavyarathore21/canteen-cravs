@@ -1,4 +1,5 @@
 # Canteen Cravs
+   **Live dashboard:** https://canteen-cravs.streamlit.app/
 
 [![CI](https://github.com/Bhavyarathore21/canteen-cravs/actions/workflows/ci.yml/badge.svg)](https://github.com/Bhavyarathore21/canteen-cravs/actions/workflows/ci.yml)
 
