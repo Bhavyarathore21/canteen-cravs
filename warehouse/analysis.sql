@@ -216,3 +216,44 @@ LEFT JOIN sold s     ON s.date_key = r.date_key AND s.item_key = i.item_key
 LEFT JOIN out_days o ON o.date_key = r.date_key AND o.item_key = i.item_key
 GROUP BY i.item_name, p.daily_prep
 ORDER BY pct_days_sold_out DESC, i.item_name;
+
+-- name: 10_daily_trend
+-- Q10. Orders, revenue and waiting time for every day (feeds the dashboard).
+SELECT d.date,
+       d.day_name,
+       COUNT(*)                                                                          AS orders,
+       ROUND(SUM(CASE WHEN f.order_status = 'Completed' THEN f.total_amount ELSE 0 END)) AS revenue,
+       ROUND(AVG(f.wait_minutes), 1)                                                     AS avg_wait_min
+FROM fact_orders f
+JOIN dim_date d USING (date_key)
+GROUP BY d.date, d.day_name
+ORDER BY d.date;
+
+-- name: 11_demand_heatmap
+-- Q11. Average orders per open day for every weekday and hour.
+WITH open_days AS (
+    SELECT weekday_num, COUNT(*) AS days
+    FROM dim_date
+    WHERE is_open_day
+    GROUP BY weekday_num
+)
+SELECT d.weekday_num,
+       d.day_name,
+       f.time_key                                  AS hour,
+       ROUND(COUNT(*) * 1.0 / od.days, 1)          AS avg_orders
+FROM fact_orders f
+JOIN dim_date d USING (date_key)
+JOIN open_days od ON od.weekday_num = d.weekday_num
+GROUP BY d.weekday_num, d.day_name, f.time_key, od.days
+ORDER BY d.weekday_num, f.time_key;
+
+-- name: 12_kpis
+-- Q12. The headline numbers.
+SELECT COUNT(*)                                                                          AS total_orders,
+       ROUND(SUM(CASE WHEN order_status = 'Completed' THEN total_amount ELSE 0 END))     AS revenue,
+       ROUND(AVG(wait_minutes), 1)                                                       AS avg_wait_min,
+       ROUND(100.0 * AVG(CASE WHEN order_status = 'Cancelled' THEN 1 ELSE 0 END), 1)     AS cancel_rate_pct,
+       ROUND(100.0 * AVG(CASE WHEN order_status = 'Expired' THEN 1 ELSE 0 END), 1)       AS no_show_rate_pct,
+       ROUND(100.0 * AVG(CASE WHEN payment_method = 'UPI' THEN 1 ELSE 0 END), 1)         AS upi_share_pct,
+       (SELECT COUNT(*) FROM dim_date WHERE is_open_day)                                 AS open_days
+FROM fact_orders;

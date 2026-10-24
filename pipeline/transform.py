@@ -27,6 +27,8 @@ def clean(raw):
     wanted = ["Placed", "Preparing", "Ready", "Completed", "Cancelled", "Expired"]
     events = events.reindex(columns=wanted)
     events.columns = [f"{c.lower()}_at" for c in events.columns]  # placed_at, ready_at ...
+    for col in events.columns:  # a status that never happened must still be a date column
+        events[col] = pd.to_datetime(events[col])
 
     # ---- payments
     pay = raw["payment_log"].drop_duplicates("id").copy()

@@ -4,3 +4,5 @@ __pycache__/
 .env
 data_lake*/
 *.duckdb
+.pytest_cache/
+.venv/

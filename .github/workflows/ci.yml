@@ -1,0 +1,67 @@
+name: CI
+
+# Runs on every push and pull request to main.
+# It proves the whole data project still works from scratch:
+# tests -> simulate data -> pipeline with quality checks -> warehouse -> analysis.
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  data-project:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            pipeline/requirements.txt
+            warehouse/requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r pipeline/requirements.txt -r warehouse/requirements.txt -r requirements-dev.txt
+
+      - name: Unit tests
+        run: pytest -q
+
+      - name: Simulate 90 days of canteen data
+        working-directory: backend
+        run: python simulator.py
+
+      - name: Run the pipeline (quality checks must pass)
+        working-directory: pipeline
+        run: python run_pipeline.py
+
+      - name: Prove the quality checks catch bad data
+        working-directory: pipeline
+        run: |
+          python make_bad_data.py
+          if python run_pipeline.py --source ../backend/canteen_bad.db --lake ../data_lake_test; then
+            echo "The broken data was NOT caught"
+            exit 1
+          else
+            echo "Broken data was correctly rejected"
+          fi
+
+      - name: Build the star schema warehouse
+        working-directory: warehouse
+        run: python build_warehouse.py
+
+      - name: Run the SQL analysis
+        working-directory: warehouse
+        run: python run_analysis.py
+
+      - name: Keep the quality report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-report
+          path: data_lake/reports

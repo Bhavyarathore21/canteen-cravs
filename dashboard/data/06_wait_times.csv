@@ -1,0 +1,11 @@
+hour_label,day_slot,orders,avg_wait_min,p90_wait_min
+08:00,Morning,351,10.6,13.7
+09:00,Morning,581,11.5,14.8
+10:00,Morning,712,11.9,15.4
+11:00,Pre-lunch,1024,12.9,16.7
+12:00,Lunch rush,1778,15.4,20.7
+13:00,Lunch rush,2118,17.0,22.7
+14:00,Post-lunch,956,13.1,17.6
+15:00,Evening,798,12.1,15.6
+16:00,Evening,836,12.3,16.1
+17:00,Evening,281,10.5,13.7

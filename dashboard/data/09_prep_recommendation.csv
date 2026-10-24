@@ -1,0 +1,13 @@
+item_name,daily_prep,avg_units_sold,open_days,days_sold_out,pct_days_sold_out,avg_leftover_other_days,suggestion
+Samosa,40,35.0,22,15,68.0,15.7,Prepare about 15% more
+Chai,60,51.2,22,10,45.0,16.1,Prepare about 15% more
+Chole Bhature,40,34.8,22,9,41.0,8.8,Prepare about 15% more
+Veg Thali,55,46.1,22,9,41.0,15.0,Prepare about 15% more
+Fried Rice,30,23.7,22,8,36.0,9.9,Prepare about 15% more
+Maggi,36,28.9,22,6,27.0,9.7,Prepare about 15% more
+Vada Pav,38,28.7,22,6,27.0,12.8,Prepare about 15% more
+Cold Coffee,25,14.4,22,1,5.0,11.1,Prepare less (leftovers)
+Veg Sandwich,40,27.6,22,1,5.0,13.0,Keep as is
+Coffee,40,23.9,22,0,0.0,16.1,Prepare less (leftovers)
+Cold Drink,40,18.1,22,0,0.0,21.9,Prepare less (leftovers)
+Poha,25,13.8,22,0,0.0,11.2,Prepare less (leftovers)

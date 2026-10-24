@@ -1,0 +1,11 @@
+hour_label,day_slot,avg_orders_per_day
+08:00,Morning,5.0
+09:00,Morning,8.3
+10:00,Morning,10.2
+11:00,Pre-lunch,14.5
+12:00,Lunch rush,25.2
+13:00,Lunch rush,30.0
+14:00,Post-lunch,13.5
+15:00,Evening,11.3
+16:00,Evening,11.8
+17:00,Evening,4.0

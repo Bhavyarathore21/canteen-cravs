@@ -1,0 +1,13 @@
+item_name,category,units_sold,revenue,units_wasted,pct_of_revenue
+Veg Thali,Meals,2356.0,164920.0,115.0,26.1
+Chole Bhature,Meals,1884.0,113040.0,61.0,17.9
+Fried Rice,Meals,1263.0,69465.0,50.0,11.0
+Veg Sandwich,Snacks,1417.0,56680.0,57.0,9.0
+Maggi,Snacks,1573.0,47190.0,83.0,7.5
+Cold Coffee,Beverages,777.0,31080.0,33.0,4.9
+Samosa,Snacks,2062.0,30930.0,84.0,4.9
+Vada Pav,Snacks,1533.0,30660.0,64.0,4.8
+Chai,Beverages,2763.0,27630.0,103.0,4.4
+Coffee,Beverages,1157.0,23140.0,57.0,3.7
+Cold Drink,Beverages,963.0,19260.0,40.0,3.0
+Poha,Breakfast,735.0,18375.0,30.0,2.9

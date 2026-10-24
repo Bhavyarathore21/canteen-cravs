@@ -1,6 +1,6 @@
 """
 run_analysis.py - runs every query in analysis.sql, prints the answers and saves
-each result as a CSV file in data_lake/analysis/ (the dashboard will read these).
+each result as a CSV file (in data_lake/analysis/ and dashboard/data/).
 
     python run_analysis.py              run all queries
     python run_analysis.py --only 05    run only queries whose name contains "05"
@@ -14,7 +14,9 @@ import pandas as pd
 
 HERE = Path(__file__).resolve().parent
 DB_FILE = HERE / "canteen_dw.duckdb"
-OUT_DIR = HERE.parent / "data_lake" / "analysis"
+# Results go to the data lake AND to the dashboard folder (small CSV files that the
+# dashboard reads, so it can run anywhere without the warehouse)
+OUT_DIRS = [HERE.parent / "data_lake" / "analysis", HERE.parent / "dashboard" / "data"]
 
 parser = argparse.ArgumentParser(description="Run the Canteen Cravs analysis queries")
 parser.add_argument("--only", help="run only queries whose name contains this text")
@@ -32,7 +34,8 @@ queries = list(zip(parts[1::2], parts[2::2]))
 
 pd.set_option("display.width", 220)
 pd.set_option("display.max_columns", 30)
-OUT_DIR.mkdir(parents=True, exist_ok=True)
+for folder in OUT_DIRS:
+    folder.mkdir(parents=True, exist_ok=True)
 
 ran = 0
 for name, sql in queries:
@@ -44,8 +47,11 @@ for name, sql in queries:
         print(question)
     df = con.execute(sql).df()
     print(df.to_string(index=False))
-    df.to_csv(OUT_DIR / f"{name}.csv", index=False)
+    for folder in OUT_DIRS:
+        df.to_csv(folder / f"{name}.csv", index=False)
     ran += 1
 
-print(f"\nRan {ran} queries. CSV files saved in {OUT_DIR}")
+print(f"\nRan {ran} queries. CSV files saved in:")
+for folder in OUT_DIRS:
+    print(f"  {folder}")
 con.close()
