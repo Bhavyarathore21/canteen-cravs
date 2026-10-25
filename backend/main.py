@@ -1,3 +1,7 @@
+import os
+from fastapi.middleware.cors import CORSMiddleware
+from demo_seed import seed_demo
+
 from typing import Literal
 import sqlite3
 
@@ -14,9 +18,17 @@ from auth import (
 from database import create_tables, get_connection, seed_menu
 
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:8080").split(",") if o.strip()],
+    allow_origin_regex=os.getenv("ALLOWED_ORIGIN_REGEX", r"https://([a-zA-Z0-9-]+\.)*(lovable\.app|lovableproject\.com|lovable\.dev)"),
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 create_tables()
 seed_menu()
+seed_demo()
 
 
 @app.get("/")
@@ -644,3 +656,7 @@ def payments_summary(admin: dict = Depends(require_admin)):
         "not_yet_paid": dict(due),
         "refunds_to_send": dict(refunds),
     }
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
