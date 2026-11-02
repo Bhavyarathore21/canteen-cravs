@@ -24,10 +24,11 @@ jobs:
           cache-dependency-path: |
             pipeline/requirements.txt
             warehouse/requirements.txt
+            backend/requirements.txt
             requirements-dev.txt
 
       - name: Install dependencies
-        run: pip install -r pipeline/requirements.txt -r warehouse/requirements.txt -r requirements-dev.txt
+        run: pip install -r pipeline/requirements.txt -r warehouse/requirements.txt -r backend/requirements.txt -r requirements-dev.txt
 
       - name: Unit tests
         run: pytest -q

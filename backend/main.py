@@ -666,3 +666,6 @@ from fastapi.staticfiles import StaticFiles
 _IMAGES = Path(__file__).parent / "static"
 _IMAGES.mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=_IMAGES), name="static")
+
+from payments_razorpay import router as razorpay_router
+app.include_router(razorpay_router)

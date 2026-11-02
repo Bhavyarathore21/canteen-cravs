@@ -3,3 +3,4 @@ uvicorn
 bcrypt
 pyjwt
 python-dotenv
+httpx
