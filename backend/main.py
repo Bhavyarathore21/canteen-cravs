@@ -669,3 +669,6 @@ app.mount("/static", StaticFiles(directory=_IMAGES), name="static")
 
 from payments_razorpay import router as razorpay_router
 app.include_router(razorpay_router)
+
+from profile_routes import router as profile_router
+app.include_router(profile_router)
